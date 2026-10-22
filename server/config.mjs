@@ -96,7 +96,8 @@ export async function resolveApiKeys() {
 
   const candidates = [
     process.env.COMMANDCODE_DB,
-    'D:\\Code\\Github\\CommandCodeGo-manager\\data\\ccp.db',
+    // 与本项目同级的 CommandCodeGo-manager 目录（默认布局）
+    path.join(ROOT, '..', 'CommandCodeGo-manager', 'data', 'ccp.db'),
     process.env.USERPROFILE
       ? path.join(process.env.USERPROFILE, 'commandcode', 'data', 'ccp.db')
       : '',
