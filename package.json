@@ -1,0 +1,22 @@
+{
+  "name": "shuati",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "本地 PDF 题库解析 + 仿粉笔答题系统",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "dev": "node --watch server/index.mjs",
+    "parse": "node server/cli/parse.mjs",
+    "repair": "node server/cli/repair.mjs",
+    "reclassify": "node server/cli/reclassify.mjs",
+    "answers": "node server/cli/apply-answers.mjs",
+    "re-explain": "node server/cli/re-explain.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
