@@ -257,6 +257,39 @@ def assign_images(questions, imgs):
                 taken.add(id(img))
                 break
 
+    # ③ 行内小图（分数、公式、上下标）：按"压在哪一行题干上"归属。
+    #    这类图只占半行高，用中心点判断很容易落到上一题（比如 3/5 这种分数）。
+    line_owner = {}
+    for qi_, q_ in enumerate(questions):
+        for ln_ in q_["stem_lines"]:
+            line_owner.setdefault(ln_["page"], []).append((ln_, qi_))
+
+    def _small_target(img):
+        best, best_key = None, None
+        cy = (img["y0"] + img["y1"]) / 2
+        for ln_, qi_ in line_owner.get(img["page"], []):
+            overlap = min(img["y1"], ln_["y1"]) - max(img["y0"], ln_["y0"])
+            if overlap <= 0:
+                continue
+            key = (overlap, -abs(cy - (ln_["y0"] + ln_["y1"]) / 2))
+            if best_key is None or key > best_key:
+                best_key, best = key, (ln_, qi_)
+        return best
+
+    for img in imgs:
+        if id(img) in taken:
+            continue
+        if (img["x1"] - img["x0"]) >= 40 or (img["y1"] - img["y0"]) >= 40:
+            continue
+        hit = _small_target(img)
+        if not hit:
+            continue
+        ln, qi = hit
+        questions[qi].setdefault("_imgs", []).append(img)
+        ln["_mark"] = True
+        img["_small_marked"] = True
+        taken.add(id(img))
+
     # ② 其余图片按"前面最近的题号"归属。
     #    用图片**中心**而不是上沿判断：题干图常常微微越出题号行（如 y0 比题号还高一点），
     #    用上沿会把它算给上一题。
@@ -307,12 +340,15 @@ def assign_images(questions, imgs):
                 for i in f["imgs"]:
                     i["_role"] = f["role"]
         elif pics or opt_imgs:
-            allp = list(opt_imgs) + list(pics)
+            allp = sorted(list(opt_imgs) + list(pics),
+                          key=lambda i: (i["page"], i["y0"], i["x0"]))
             for i in allp:
                 i["_role"] = "inline"
             q["figures"] = [{"role": "inline", "imgs": allp}]
-            # 行内公式/小图：在题干对应行补一个占位标记
+            # 行内公式/小图：在题干对应行补一个占位标记（③ 已标过的跳过）
             for i in allp:
+                if i.get("_small_marked"):
+                    continue
                 if i["y1"] - i["y0"] < 40 and i["x1"] - i["x0"] < 40:
                     best, bestd = None, 1e9
                     for ln in q["stem_lines"]:
@@ -326,27 +362,57 @@ def assign_images(questions, imgs):
         q.pop("_imgs", None)
 
 
+def _drop_bracket_blanks(stem, figs):
+    """数字序列里的"（ ）"常被画成小图。它只是空括号，换回文字更清楚。"""
+    if "〔图〕" not in stem:
+        return stem, figs
+    bare = stem.replace("〔图〕", "").strip()
+    if not bare or not re.fullmatch(r"[\d\s，,．.、（）()。；;：:]+", bare):
+        return stem, figs
+    kept = []
+    for f in figs:
+        if f["role"] != "inline":
+            kept.append(f)
+            continue
+        parts = [p for p in f["parts"] if not (p["w"] <= 80 and p["h"] <= 60)]
+        if parts:
+            kept.append({**f, "parts": parts})
+    return stem.replace("〔图〕", "（ ）"), kept
+
+
 def render(doc, q, media_dir):
     out = []
     for f in q["figures"]:
-        by_page = {}
-        for i in f["imgs"]:
-            by_page.setdefault(i["page"], []).append((i["x0"], i["y0"], i["x1"], i["y1"]))
+        role = f["role"]
         parts = []
-        for pno in sorted(by_page):
-            rs = by_page[pno]
-            bb = (min(r[0] for r in rs), min(r[1] for r in rs),
-                  max(r[2] for r in rs), max(r[3] for r in rs))
+
+        # 行内小图（分数/公式）各自出一张：合并成一个外框会把中间的正文也框进来
+        if role == "inline":
+            ordered = sorted(f["imgs"], key=lambda i: (i["page"], i["y0"], i["x0"]))
+            clips = [(i["page"], (i["x0"], i["y0"], i["x1"], i["y1"])) for i in ordered]
+        else:
+            by_page = {}
+            for i in f["imgs"]:
+                by_page.setdefault(i["page"], []).append((i["x0"], i["y0"], i["x1"], i["y1"]))
+            clips = [(pno, (min(r[0] for r in rs), min(r[1] for r in rs),
+                            max(r[2] for r in rs), max(r[3] for r in rs)))
+                     for pno, rs in sorted(by_page.items())]
+
+        multi = len(clips) > 1
+        for k, (pno, bb) in enumerate(clips):
             clip = pymupdf.Rect(bb[0] - 2, bb[1] - 2, bb[2] + 2, bb[3] + 2)
             pix = doc[pno].get_pixmap(clip=clip, matrix=pymupdf.Matrix(RENDER_ZOOM, RENDER_ZOOM))
-            suffix = f"-p{pno + 1}" if len(by_page) > 1 else ""
-            name = f"q{q['no']}-{f['role']}{suffix}.png"
+            if multi:
+                suffix = f"-p{pno + 1}" if role != "inline" else f"-{k + 1}"
+            else:
+                suffix = ""
+            name = f"q{q['no']}-{role}{suffix}.png"
             out_path = os.path.join(media_dir, name)
             pix.save(out_path)
             trimmed = _trim_file(out_path) if _trim_file else None
             w, h = trimmed if trimmed else (pix.width, pix.height)
             parts.append({"file": name, "w": w, "h": h})
-        out.append({"role": f["role"], "parts": parts})
+        out.append({"role": role, "parts": parts})
     return out
 
 
@@ -384,6 +450,8 @@ def main():
         if not stem and q["kind"] == "text" and not figs:
             # 题干是矢量排版的公式/图形，文本层取不到
             stem = "（原卷此题题干为公式/图形排版，文本层为空，请参看解析）"
+        if q["kind"] == "text":
+            stem, figs = _drop_bracket_blanks(stem, figs)
         result.append({"no": q["no"], "page": q["page"], "kind": q["kind"],
                        "stem": stem, "options": options, "figures": figs,
                        "answer": q.get("answer")})

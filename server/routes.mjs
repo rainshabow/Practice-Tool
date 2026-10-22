@@ -288,7 +288,8 @@ api.post('/exams/:id/suspend', (req, res) => {
       answers,
       durationMs,
       questionNos: answeredNos,
-      mode: 'suspend',
+      // 冲刺中途中止也走这里，用 mode 区分来源（'sprint' / 'suspend'）
+      mode: req.body?.mode || 'suspend',
     }));
   }
 

@@ -1585,13 +1585,32 @@ async function renderSprint(id) {
 
   $('#btn-sprint-quit').onclick = () => {
     if (state.sprint.finished) { navigate(`#/exam/${encodeURIComponent(exam.id)}`); return; }
+    const sp = state.sprint;
+    const answered = Object.values(sp.answers).filter(Boolean).length;
     openModal({
       title: '退出冲刺',
-      sub: '本次结果不会保存，确定退出？',
+      sub: answered
+        ? `已作答的 ${answered} 题会照常判分并记进错题本，作答进度也会保存，回到试卷页可以「继续做题」。`
+        : '还没有作答，直接退出即可。',
       body: '',
       actions: [
         { label: '继续做题', cls: 'ghost', onClick: closeModal },
-        { label: '退出', onClick: () => { closeModal(); cleanupSprint(); navigate(`#/exam/${encodeURIComponent(exam.id)}`); } },
+        {
+          label: answered ? '保存并退出' : '退出',
+          onClick: async () => {
+            closeModal();
+            const snap = await saveSprintProgress();
+            // 快照只用来当场恢复，清掉，避免首页还挂着「继续做题」
+            if (snap) {
+              await api(`/exams/${encodeURIComponent(exam.id)}/suspend`, { method: 'DELETE' })
+                .catch(() => { /* 清不掉不影响恢复 */ });
+            }
+            cleanupSprint();
+            // 直接把快照交棒给试卷页，避免依赖 URL 往返
+            state.resumeSnapshot = snap;
+            navigate(`#/exam/${encodeURIComponent(exam.id)}`);
+          },
+        },
       ],
     });
   };
@@ -1616,6 +1635,29 @@ function cleanupSprint() {
   if (state.sprint?.interval) clearInterval(state.sprint.interval);
   if (state.sprint) state.sprint.interval = null;
   document.onkeydown = null;
+}
+
+/**
+ * 中途退出冲刺：把已作答的题按「中止」的方式存下来
+ * —— 只判已作答的题、错题进错题本、刷题进度落库，并留下中断快照供「继续做题」。
+ */
+async function saveSprintProgress() {
+  const sp = state.sprint;
+  if (!sp) return null;
+  const answered = Object.keys(sp.answers).filter((k) => sp.answers[k]);
+  if (!answered.length) return null;
+  const usedMs = sp.elapsedMs || (Date.now() - sp.totalStart);
+  try {
+    await api(`/exams/${encodeURIComponent(sp.exam.id)}/suspend`, {
+      method: 'POST',
+      body: { answers: sp.answers, durationMs: usedMs, mode: 'sprint' },
+    });
+    toast(`已保存 ${answered.length} 题的作答与成绩`);
+    return { answers: { ...sp.answers }, elapsedMs: usedMs };
+  } catch (err) {
+    toast(`保存失败：${err.message}`);
+    return null;
+  }
 }
 
 function paintSprintQuestion() {
@@ -1861,9 +1903,18 @@ async function renderExam(id) {
   state.paused = false;
   state.lastAttempt = exam.attempts?.[0] || null;
 
-  // 「继续做题」：用服务端保存的中断快照恢复作答与计时
+  // 「继续做题」：优先用冲刺退出时直接交过来的快照，其次用服务端保存的中断快照
+  const handoff = state.resumeSnapshot;
+  state.resumeSnapshot = null;
   const wantResume = parseHash().params.get('resume') === '1';
-  if (wantResume && exam.suspended) {
+  if (handoff) {
+    state.answers = { ...(handoff.answers || {}) };
+    state.elapsed = Math.round((Number(handoff.elapsedMs) || 0) / 1000);
+    state.graded = false;
+    saveLocal();
+    const n = Object.values(state.answers).filter(Boolean).length;
+    setTimeout(() => toast(`已恢复到上次进度（已答 ${n} 题）`), 300);
+  } else if (wantResume && exam.suspended) {
     const sus = exam.suspended;
     state.answers = { ...(sus.answers || {}) };
     state.elapsed = Math.round((Number(sus.elapsedMs) || 0) / 1000);
