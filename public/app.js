@@ -2347,13 +2347,13 @@ async function renderEditor(examId, no) {
             <div class="hint">〔图〕是配图占位标记，保留它会在这里显示对应图片。</div>
           </div>
 
-          <div class="field">
+          <div class="field" id="e-optwrap">
             <label>选项</label>
             <div class="edit-opts">${optFields}</div>
           </div>
 
           <div class="edit-row2">
-            <div class="field">
+            <div class="field" id="e-answerwrap">
               <label>正确答案</label>
               <input id="e-answer" value="${esc(q.answer || '')}" placeholder="如 A 或 AD" />
             </div>
@@ -2368,10 +2368,10 @@ async function renderEditor(examId, no) {
             <textarea id="e-expl" rows="10" placeholder="解析正文">${esc(q.explanation || '')}</textarea>
           </div>
 
-          ${isEssay ? `<div class="field">
+          <div class="field" id="e-essaywrap">
             <label>参考答案（论述题）</label>
-            <textarea id="e-answertext" rows="3">${esc(q.answerText || '')}</textarea>
-          </div>` : ''}
+            <textarea id="e-answertext" rows="3" placeholder="如果这题有标准作答，写在这里">${esc(q.answerText || '')}</textarea>
+          </div>
         </div>
 
         <div class="edit-pdf">
@@ -2415,16 +2415,30 @@ async function renderEditor(examId, no) {
   $('#pdf-go').onclick = () => showPage($('#pdf-page').value);
   $('#pdf-page').onkeydown = (e) => { if (e.key === 'Enter') showPage($('#pdf-page').value); };
 
-  const collect = () => ({
-    kind: $('#e-kind').value,
-    section: $('#e-section').value.trim(),
-    stem: $('#e-stem').value,
-    options: [0, 1, 2, 3].map((i) => $(`#e-opt-${i}`).value),
-    answer: $('#e-answer').value.trim().toUpperCase(),
-    keypoints: $('#e-keypoints').value,
-    explanation: $('#e-expl').value,
-    ...(isEssay ? { answerText: $('#e-answertext').value } : {}),
-  });
+  const collect = () => {
+    const kind = $('#e-kind').value;
+    const hasOptions = kind === 'text' || kind === 'figure';
+    return {
+      kind,
+      section: $('#e-section').value.trim(),
+      stem: $('#e-stem').value,
+      ...(kind === 'essay' ? {} : { answer: $('#e-answer').value.trim().toUpperCase() }),
+      keypoints: $('#e-keypoints').value,
+      explanation: $('#e-expl').value,
+      ...(hasOptions ? { options: [0, 1, 2, 3].map((i) => $(`#e-opt-${i}`).value) } : {}),
+      ...(kind === 'essay' ? { answerText: $('#e-answertext').value } : {}),
+    };
+  };
+
+  // 题型决定显示哪些字段：论述题没有 ABCD，图片题的选项在截图里
+  const syncFields = () => {
+    const kind = $('#e-kind').value;
+    $('#e-optwrap').hidden = !(kind === 'text' || kind === 'figure');
+    $('#e-answerwrap').hidden = kind === 'essay';
+    $('#e-essaywrap').hidden = kind !== 'essay';
+  };
+  $('#e-kind').onchange = syncFields;
+  syncFields();
 
   const save = async () => {
     const body = collect();
