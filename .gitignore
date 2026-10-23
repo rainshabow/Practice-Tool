@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 *.log
 .DS_Store
+_t/
+.check_tmp.py

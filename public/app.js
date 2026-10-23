@@ -601,6 +601,7 @@ function paintWrongbook() {
         ${it.mastered ? '<span class="chip green">已掌握</span>' : `<span class="chip red">错 ${it.times || 1} 次</span>`}
         <span class="wb-actions">
           <button class="mini" data-goto="${esc(it.examId)}#${it.no}">看原题</button>
+          <button class="mini" data-edit="${esc(it.examId)}#${it.no}">编辑</button>
           <button class="mini" data-master="${esc(it.key)}" data-to="${it.mastered ? 0 : 1}">${it.mastered ? '取消已掌握' : '标记已掌握'}</button>
           <button class="mini" data-remove="${esc(it.key)}">移除</button>
         </span>
@@ -616,6 +617,12 @@ function paintWrongbook() {
     el.onclick = () => {
       const [id, no] = el.dataset.goto.split('#');
       navigate(`#/exam/${encodeURIComponent(id)}/${no}`);
+    };
+  });
+  list.querySelectorAll('[data-edit]').forEach((el) => {
+    el.onclick = () => {
+      const [id, no] = el.dataset.edit.split('#');
+      navigate(`#/edit/${encodeURIComponent(id)}/${no}`);
     };
   });
   list.querySelectorAll('[data-master]').forEach((el) => {
@@ -1507,6 +1514,7 @@ function finishDrill() {
             <span class="chip green">答案 ${esc(w.item.answer)}</span>
             <span class="wb-actions">
               <a class="mini" href="#/exam/${encodeURIComponent(w.item.examId)}/${w.item.no}">看原题</a>
+              <a class="mini" href="#/edit/${encodeURIComponent(w.item.examId)}/${w.item.no}">编辑</a>
             </span>
           </div>
           <div class="wb-stem">${esc((w.item.stem || '').slice(0, 140))}</div>
