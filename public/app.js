@@ -86,6 +86,7 @@ function saveLocal() {
 /* ------------------------------------------------------------------ 图标 */
 const icons = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>',
+  next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>',
@@ -137,6 +138,8 @@ async function render() {
     await renderSprint(id);
   } else if (kind === 'types' && id) {
     await renderTypePractice(id);
+  } else if (kind === 'edit' && id && q) {
+    await renderEditor(id, q);
   } else if (kind === 'types') {
     await renderTypes();
   } else if (kind === 'history') {
@@ -2247,11 +2250,194 @@ function analysisBlock(q, isRight, picked, key) {
     <div class="qa-foot">
       <span>${footNote}</span>
       ${needExplain ? '<button class="mini primary" data-act="explain">生成解析</button>' : ''}
+      <a class="mini" href="#/edit/${encodeURIComponent(state.exam.id)}/${q.no}" data-act="edit">编辑本题</a>
       <button class="mini" data-act="fix">修订答案</button>
       <button class="mini" data-act="reanalyze">重新解析</button>
       <button class="mini" data-act="wrongbook">加入错题</button>
     </div>
   </div>`;
+}
+
+/* ------------------------------------------------------------------ 题目编辑 */
+async function renderEditor(examId, no) {
+  stopTimer();
+  state.view = 'edit';
+  let exam;
+  try {
+    exam = await api(`/exams/${encodeURIComponent(examId)}`);
+  } catch (err) {
+    app.innerHTML = `<div class="page"><div class="empty-state">加载失败：${esc(err.message)}</div></div>`;
+    return;
+  }
+  state.exam = exam;
+  const q = exam.questions.find((x) => x.no === Number(no));
+  if (!q) {
+    app.innerHTML = `<div class="page"><div class="empty-state">题目不存在</div></div>`;
+    return;
+  }
+  const nos = exam.questions.map((x) => x.no);
+  const at = nos.indexOf(q.no);
+  const prev = at > 0 ? nos[at - 1] : null;
+  const next = at >= 0 && at < nos.length - 1 ? nos[at + 1] : null;
+  const page = q.page || 1;
+  const sections = [...new Set(exam.questions.map((x) => x.section).filter(Boolean))];
+  const opts = q.options || [];
+  const isEssay = q.kind === 'essay' || (!opts.length && q.kind !== 'image');
+
+  const optFields = [0, 1, 2, 3].map((i) => {
+    const o = opts[i];
+    return `<div class="edit-opt">
+      <span class="badge">${'ABCD'[i]}</span>
+      <input id="e-opt-${i}" value="${esc(o ? o.text : '')}" placeholder="选项 ${'ABCD'[i]} 内容" />
+    </div>`;
+  }).join('');
+
+  app.innerHTML = `
+    ${topbar({
+      center: `编辑 · 第 ${q.no} 题`,
+      back: `#/exam/${encodeURIComponent(exam.id)}/${q.no}`,
+      right: `<a class="icon-btn" href="#/exam/${encodeURIComponent(exam.id)}/${prev ?? q.no}" title="上一题">${icons.back}</a>
+              <a class="icon-btn" href="#/exam/${encodeURIComponent(exam.id)}/${next ?? q.no}" title="下一题">${icons.next}</a>
+              <button class="icon-btn" id="e-save" title="保存">${icons.submit}<span>保存</span></button>`,
+    })}
+    <div class="page">
+      <div class="edit-head">
+        <div>
+          <h1>第 ${q.no} 题</h1>
+          <div class="edit-meta">
+            <span class="chip">${esc(exam.title)}</span>
+            <span class="chip">原卷第 ${page} 页</span>
+            ${q.editedAt ? `<span class="chip orange">已于 ${new Date(q.editedAt).toLocaleString('zh-CN', { hour12: false })} 手工修订</span>` : ''}
+          </div>
+        </div>
+        <div class="edit-actions">
+          <button class="btn ghost sm" id="e-reload">放弃修改</button>
+          <button class="btn sm" id="e-save2">保存修改</button>
+        </div>
+      </div>
+
+      <div class="edit-wrap">
+        <div class="edit-form">
+          <div class="edit-row2">
+            <div class="field">
+              <label>题型</label>
+              <select id="e-kind">
+                ${[['text', '单选题'], ['figure', '图形题'], ['essay', '论述题'], ['image', '图片题']]
+    .map(([v, t]) => `<option value="${v}" ${q.kind === v ? 'selected' : ''}>${t}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label>分类</label>
+              <input id="e-section" list="e-sections" value="${esc(q.section || '')}" />
+              <datalist id="e-sections">${sections.map((s) => `<option value="${esc(s)}"></option>`).join('')}</datalist>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>题干</label>
+            <textarea id="e-stem" rows="6" placeholder="题干文字">${esc(q.stem || '')}</textarea>
+            <div class="hint">〔图〕是配图占位标记，保留它会在这里显示对应图片。</div>
+          </div>
+
+          <div class="field">
+            <label>选项</label>
+            <div class="edit-opts">${optFields}</div>
+          </div>
+
+          <div class="edit-row2">
+            <div class="field">
+              <label>正确答案</label>
+              <input id="e-answer" value="${esc(q.answer || '')}" placeholder="如 A 或 AD" />
+            </div>
+            <div class="field">
+              <label>考点</label>
+              <input id="e-keypoints" value="${esc((q.keypoints || []).join(' / '))}" placeholder="用 / 或 , 分隔" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label>解析</label>
+            <textarea id="e-expl" rows="10" placeholder="解析正文">${esc(q.explanation || '')}</textarea>
+          </div>
+
+          ${isEssay ? `<div class="field">
+            <label>参考答案（论述题）</label>
+            <textarea id="e-answertext" rows="3">${esc(q.answerText || '')}</textarea>
+          </div>` : ''}
+        </div>
+
+        <div class="edit-pdf">
+          <div class="edit-pdf-head">
+            <span>原卷对照</span>
+            <button class="mini" id="pdf-prev">←</button>
+            <input id="pdf-page" type="number" min="1" value="${page}" />
+            <button class="mini" id="pdf-next">→</button>
+            <button class="mini" id="pdf-go">跳转</button>
+            <a class="mini" id="pdf-open" target="_blank" rel="noopener">打开 PDF</a>
+          </div>
+          <div class="edit-pdf-body">
+            <img id="pdf-img" alt="原卷第 ${page} 页" />
+            <div class="edit-pdf-tip" id="pdf-tip" hidden></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const pdfUrl = (p) => `/api/exams/${encodeURIComponent(exam.id)}/pdf#page=${p}`;
+  const pageImg = (p) => `/api/exams/${encodeURIComponent(exam.id)}/page/${p}.png?v=2`;
+  const img = $('#pdf-img');
+  const tip = $('#pdf-tip');
+  const showPage = (p) => {
+    const n = Math.max(1, Number(p) || 1);
+    $('#pdf-page').value = n;
+    tip.hidden = true;
+    img.hidden = false;
+    img.src = pageImg(n);
+    $('#pdf-open').href = pdfUrl(n);
+  };
+  img.onerror = () => {
+    img.hidden = true;
+    tip.hidden = false;
+    tip.textContent = '这一页渲染不出来（可能超出卷面页数），可以点「打开 PDF」看原文件。';
+  };
+  showPage(page);
+  $('#pdf-open').href = pdfUrl(page);
+  $('#pdf-prev').onclick = () => showPage(Number($('#pdf-page').value) - 1);
+  $('#pdf-next').onclick = () => showPage(Number($('#pdf-page').value) + 1);
+  $('#pdf-go').onclick = () => showPage($('#pdf-page').value);
+  $('#pdf-page').onkeydown = (e) => { if (e.key === 'Enter') showPage($('#pdf-page').value); };
+
+  const collect = () => ({
+    kind: $('#e-kind').value,
+    section: $('#e-section').value.trim(),
+    stem: $('#e-stem').value,
+    options: [0, 1, 2, 3].map((i) => $(`#e-opt-${i}`).value),
+    answer: $('#e-answer').value.trim().toUpperCase(),
+    keypoints: $('#e-keypoints').value,
+    explanation: $('#e-expl').value,
+    ...(isEssay ? { answerText: $('#e-answertext').value } : {}),
+  });
+
+  const save = async () => {
+    const body = collect();
+    // 选项清空到只剩一两项时保留原样，避免把图题误删
+    if (!body.options.some((t) => t.trim())) delete body.options;
+    try {
+      await api(`/exams/${encodeURIComponent(exam.id)}/questions/${q.no}`, { method: 'PATCH', body });
+      toast('已保存');
+      navigate(`#/exam/${encodeURIComponent(exam.id)}/${q.no}`);
+    } catch (err) {
+      toast(`保存失败：${err.message}`);
+    }
+  };
+  $('#e-save').onclick = save;
+  $('#e-save2').onclick = save;
+  $('#e-reload').onclick = () => {
+    if (confirm('放弃本次修改？')) navigate(`#/exam/${encodeURIComponent(exam.id)}/${q.no}`);
+  };
+  document.onkeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
+  };
 }
 
 /* ------------------------------------------------------------------ 题卡事件 */

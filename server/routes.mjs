@@ -18,6 +18,7 @@ function sameAnswer(a, b) {
   return canon(a) === canon(b);
 }
 import { resetApiKeyCache } from './lib/llm.mjs';
+import { renderPage } from './lib/pdfpage.mjs';
 import {
   deleteExam, ensureDirs, examDir, examFile, listExams, loadExam, mediaDir,
   readJob, saveExam, uniqueId, writeJob, writeJson,
@@ -142,26 +143,85 @@ api.patch('/exams/:id/questions/:no', (req, res) => {
   if (!exam) return res.status(404).json({ error: '题集不存在' });
   const q = exam.questions.find((x) => x.no === Number(req.params.no));
   if (!q) return res.status(404).json({ error: '题目不存在' });
-  const { answer, explanation, note, marked, section } = req.body || {};
+  const b = req.body || {};
+  const snapshot = () => JSON.stringify([
+    q.kind, q.stem, q.options, q.answer, q.explanation, q.section, q.keypoints, q.answerText,
+  ]);
+  const before = snapshot();
+
+  // 先改选项，答案校验要用新的选项表
+  if (Array.isArray(b.options)) {
+    q.options = b.options.map((o, i) => {
+      const label = 'ABCDEFGH'[i];
+      const text = typeof o === 'string' ? o : (o?.text ?? '');
+      return { label, text: String(text) };
+    });
+  }
+  if (b.stem !== undefined) q.stem = String(b.stem);
+  if (b.kind !== undefined && ['text', 'figure', 'essay', 'image'].includes(b.kind)) q.kind = b.kind;
+  if (b.answerText !== undefined) q.answerText = String(b.answerText);
+  if (b.keypoints !== undefined) {
+    q.keypoints = (Array.isArray(b.keypoints) ? b.keypoints : String(b.keypoints).split(/[,，、\s]+/))
+      .map((s) => String(s).trim())
+      .filter(Boolean);
+  }
+
+  const { answer, explanation, note, marked, section } = b;
   if (answer !== undefined) {
     const labels = q.options.map((o) => o.label);
     if (answer === null || answer === '') {
       q.answer = null;
       q.answerSource = null;
     } else if (labels.includes(String(answer).toUpperCase())) {
-      q.answer = String(answer).toUpperCase();
-      q.answerSource = 'manual';
-      q.confidence = 'high';
+      const next = String(answer).toUpperCase();
+      // 值没变就别把「粉笔官方答案」降级成人工修订
+      if (q.answer !== next) {
+        q.answer = next;
+        q.answerSource = 'manual';
+        q.confidence = 'high';
+      }
     } else {
-      return res.status(400).json({ error: `答案必须是 ${labels.join('/')} 之一` });
+      return res.status(400).json({ error: `答案必须是 ${labels.join('/') || '选项'} 之一` });
     }
   }
   if (explanation !== undefined) q.explanation = String(explanation);
   if (note !== undefined) q.note = String(note);
   if (marked !== undefined) q.marked = Boolean(marked);
   if (section !== undefined) q.section = String(section);
+  // 只有真的改了内容才盖「手工修订」的时间戳
+  if (snapshot() !== before) q.editedAt = new Date().toISOString();
   saveExam(exam);
   res.json(q);
+});
+
+/** 原卷 PDF：给编辑页对照用（inline 打开，配合 #page=N 直接跳到原题页） */
+api.get('/exams/:id/pdf', (req, res) => {  const exam = loadExam(req.params.id);
+  if (!exam) return res.status(404).json({ error: '题集不存在' });
+  const dir = examDir(req.params.id);
+  const want = String(req.query.variant || '');
+  const order = want ? [want] : ['source', 'solution'];
+  const file = order
+    .map((v) => path.join(dir, `${v}.pdf`))
+    .find((p) => fs.existsSync(p));
+  if (!file) return res.status(404).json({ error: '这套卷没有保留原始 PDF' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'inline; filename="exam.pdf"');
+  res.setHeader('Cache-Control', 'no-cache');
+  fs.createReadStream(file).pipe(res);
+});
+
+/** 原卷某一页的图片（服务端渲染 + 缓存），内嵌到编辑页里对照 */
+api.get('/exams/:id/page/:n.png', async (req, res) => {
+  const page = Number(req.params.n);
+  if (!Number.isFinite(page) || page < 1) return res.status(400).json({ error: '页码不合法' });
+  try {
+    const file = await renderPage(req.params.id, page, String(req.query.variant || ''));
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-cache');
+    fs.createReadStream(file).pipe(res);
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
 });
 
 api.post('/exams/:id/questions/:no/reanalyze', async (req, res) => {
